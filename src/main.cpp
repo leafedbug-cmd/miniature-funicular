@@ -161,6 +161,12 @@ void buildFusedView() {
     fusedHits[i] = min<uint8_t>(nrfHits[i], 9);
   }
 
+  // Keep the AP beacon energy visible in the interpreted view.
+  const int apCenter = indexFromWifiChannel(kApChannel);
+  if (apCenter >= 0) {
+    addEnergyToBand(fusedHits, apCenter, 8, 2);
+  }
+
   for (size_t i = 0; i < wifiHitCount; ++i) {
     const int center = indexFromWifiChannel(wifiHits[i].channel);
     if (center < 0) {
@@ -216,21 +222,24 @@ void runNrfSweep() {
   radio.setRetries(0, 0);
   radio.disableDynamicPayloads();
   radio.setPALevel(RF24_PA_MAX);
-  radio.setDataRate(RF24_1MBPS);
   radio.setCRCLength(RF24_CRC_DISABLED);
 
   setStatusLed(LedMode::NrfSweep);
 
-  for (uint8_t pass = 0; pass < 3; ++pass) {
+  const rf24_datarate_e rates[] = {RF24_2MBPS, RF24_1MBPS, RF24_250KBPS};
+  for (uint8_t pass = 0; pass < 6; ++pass) {
+    radio.setDataRate(rates[pass % 3]);
+    radio.startListening();
     for (uint8_t ch = 0; ch < 126; ++ch) {
       radio.setChannel(ch);
-      delayMicroseconds(140);
+      delayMicroseconds(180);
       if (radio.testRPD()) {
         if (nrfHits[ch] < 3) {
           ++nrfHits[ch];
         }
       }
     }
+    radio.stopListening();
   }
 
   lastNrfScanMs = millis();
@@ -293,15 +302,16 @@ String renderHtml() {
             ".card h2{margin:0 0 12px;font-size:15px;letter-spacing:.14em;text-transform:uppercase;color:#f1f6fb}.meta{display:flex;flex-wrap:wrap;gap:10px;font-size:13px;color:var(--muted)}"
             ".statrow{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.stat{padding:14px;border:1px solid #233447;border-radius:14px;background:rgba(255,255,255,.02)}"
             ".label{font-size:11px;text-transform:uppercase;letter-spacing:.14em;color:var(--muted)}.value{font-size:22px;font-weight:800;margin-top:6px}"
-            ".bars{display:grid;grid-template-columns:repeat(126,1fr);gap:2px;align-items:end;height:220px;margin-top:14px;padding:14px;background:#071018;border:1px solid #1d2a38;border-radius:14px;overflow:hidden}"
-            ".bar{min-height:4px;border-radius:4px 4px 0 0;background:linear-gradient(180deg,#7cf7b0,#18a566)}.bar.nrf{background:linear-gradient(180deg,#ffd166,#c58b15)}"
+            ".bars{display:grid;grid-template-columns:repeat(126,1fr);gap:2px;align-items:end;height:240px;margin-top:14px;padding:14px;background:linear-gradient(180deg,#0d1f2d,#08111a);border:1px solid #1d2a38;border-radius:14px;overflow:hidden}"
+            ".bar{min-height:6px;border-radius:4px 4px 0 0;background:linear-gradient(180deg,#7cf7b0,#18a566);transition:height .2s ease,opacity .2s ease}.bar.nrf{background:linear-gradient(180deg,#ffd166,#c58b15)}"
             ".bar.fused{background:linear-gradient(180deg,var(--fusion),#1f82b7)}"
             ".legend{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted);margin-top:10px}.dot{width:10px;height:10px;border-radius:999px;display:inline-block;margin-right:6px}"
-            ".list{display:grid;gap:10px}.row{display:grid;grid-template-columns:1fr auto auto auto;gap:12px;align-items:center;padding:12px 14px;border:1px solid #233447;border-radius:12px;background:rgba(255,255,255,.02)}"
+            ".list{display:grid;gap:10px}.row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;align-items:center;padding:12px 14px;border:1px solid #233447;border-radius:12px;background:rgba(255,255,255,.02)}"
+            ".kv{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;color:var(--muted);font-size:12px}"
             ".ssid{font-weight:700}.muted{color:var(--muted)}.good{color:var(--accent2)}.bad{color:var(--danger)}"
             ".footer{padding:18px 0 8px;color:var(--muted);font-size:12px}.blink{animation:blink 1s steps(2,end) infinite}@keyframes blink{50%{opacity:.35}}"
             "@media (orientation: landscape) and (max-width:1100px){.grid{grid-template-columns:repeat(12,1fr)}.card:nth-of-type(1){grid-column:span 12}.card:nth-of-type(2),.card:nth-of-type(3){grid-column:span 6}.bars{height:280px}}"
-            "@media (max-width:900px){.statrow{grid-template-columns:repeat(2,minmax(0,1fr))}.row{grid-template-columns:1fr auto}.bars{height:160px}}"
+            "@media (max-width:900px){.statrow{grid-template-columns:repeat(2,minmax(0,1fr))}.row{grid-template-columns:1fr}.kv{justify-content:flex-start}.bars{height:170px}}"
             "</style></head><body><div class='wrap'>"
             "<header><div><div class='brand'>bugged<span>lab</span>.com</div><div class='sub'>open lab access point on ESP32-S3 with live Wi-Fi and nRF24L01+PA+LNA band sweeps.</div></div>"
             "<div class='pill blink'>SSID: bumptima</div></header>"
@@ -324,21 +334,21 @@ String renderHtml() {
             "const bleList=document.getElementById('bleList');"
             "const meta=document.getElementById('meta');"
             "function ageLabel(ms){if(ms<1000)return ms+' ms';const s=(ms/1000).toFixed(ms<10000?1:0);return s+' s';}"
-            "function renderBars(el,data,maxV,klass){el.innerHTML='';for(let i=0;i<data.length;i++){const v=data[i];const b=document.createElement('div');b.className='bar '+klass;b.style.height=(4+(v/maxV)*100)+'%';b.style.opacity=(v>0?Math.min(0.25+v/(maxV*1.2),1):0.16).toString();b.title='Ch '+i+' => '+v;el.appendChild(b);}}"
+            "function renderBars(el,data,maxV,klass){el.innerHTML='';for(let i=0;i<data.length;i++){const v=data[i];const b=document.createElement('div');b.className='bar '+klass;const level=maxV>0?(v/maxV):0;b.style.height=(6+level*94)+'%';b.style.opacity=(v>0?Math.min(0.4+level*0.7,1):0.22).toString();if(klass==='nrf'){if(v>=3){b.style.background='linear-gradient(180deg,#ffd166,#d39a24)';}else if(v===2){b.style.background='linear-gradient(180deg,#f7bc54,#af7a17)';}else if(v===1){b.style.background='linear-gradient(180deg,#b6943b,#7a5c15)';}else{b.style.background='linear-gradient(180deg,#20364a,#172838)';}}b.title='Ch '+i+' => '+v;el.appendChild(b);}}"
             "function render(data){"
             "document.getElementById('apSsid').textContent=data.ap_ssid;"
             "document.getElementById('apIp').textContent=data.ap_ip;"
             "document.getElementById('clients').textContent=data.clients;"
             "document.getElementById('rfAge').textContent=ageLabel(Math.min(data.nrf_age_ms,data.ble_age_ms));"
-            "meta.innerHTML='<span>Wi-Fi scan age: '+ageLabel(data.wifi_age_ms)+'</span><span>BLE scan age: '+ageLabel(data.ble_age_ms)+'</span><span>AP channel: '+data.ap_channel+'</span><span>Wi-Fi scan running: '+(data.wifi_scan_running?'yes':'no')+'</span>';"
+            "meta.innerHTML='<span>Wi-Fi scan age: '+ageLabel(data.wifi_age_ms)+'</span><span>BLE scan age: '+ageLabel(data.ble_age_ms)+'</span><span>AP channel: '+data.ap_channel+'</span><span>nRF active channels: '+data.nrf_active_channels+'</span><span>nRF peak hits: '+data.nrf_peak+'</span><span>Wi-Fi scan running: '+(data.wifi_scan_running?'yes':'no')+'</span>';"
             "renderBars(fusedBars,data.fused,9,'fused');"
             "renderBars(nrfBars,data.nrf,3,'nrf');"
             "wifiList.innerHTML='';"
             "if(!data.wifi.length){wifiList.innerHTML='<div class=\"row\"><div class=\"ssid\">No networks seen yet</div><div class=\"muted\">waiting for scan</div></div>';}"
-            "else{for(const net of data.wifi){const row=document.createElement('div');row.className='row';row.innerHTML='<div><div class=\"ssid\">'+(net.ssid||'[hidden]')+'</div><div class=\"muted\">Channel '+net.channel+'</div></div><div>'+net.rssi+' dBm</div><div class=\"'+(net.open?'good':'bad')+'\">'+(net.open?'open':'secured')+'</div><div class=\"muted\">'+net.bssid+'</div>';wifiList.appendChild(row);}}"
+            "else{for(const net of data.wifi){const row=document.createElement('div');row.className='row';row.innerHTML='<div><div class=\"ssid\">'+(net.ssid||'[hidden]')+'</div><div class=\"muted\">'+net.bssid+'</div></div><div class=\"kv\"><span>Ch '+net.channel+'</span><span>'+net.rssi+' dBm</span><span class=\"'+(net.open?'good':'bad')+'\">'+(net.open?'open':'secured')+'</span></div>';wifiList.appendChild(row);}}"
             "bleList.innerHTML='';"
             "if(!data.ble.length){bleList.innerHTML='<div class=\"row\"><div class=\"ssid\">No BLE advertisers yet</div><div class=\"muted\">scan pending</div></div>'; }"
-            "else{for(const dev of data.ble){const row=document.createElement('div');row.className='row';row.innerHTML='<div><div class=\"ssid\">'+dev.name+'</div><div class=\"muted\">'+dev.addr+'</div></div><div>'+dev.rssi+' dBm</div><div class=\"'+(dev.connectable?'good':'bad')+'\">'+(dev.connectable?'connectable':'broadcast')+'</div><div class=\"muted\">BLE</div>';bleList.appendChild(row);}}"
+            "else{for(const dev of data.ble){const row=document.createElement('div');row.className='row';row.innerHTML='<div><div class=\"ssid\">'+dev.name+'</div><div class=\"muted\">'+dev.addr+'</div></div><div class=\"kv\"><span>'+dev.rssi+' dBm</span><span class=\"'+(dev.connectable?'good':'bad')+'\">'+(dev.connectable?'connectable':'broadcast')+'</span></div>';bleList.appendChild(row);}}"
             "}"
             "async function tick(){const r=await fetch('/api/status',{cache:'no-store'});render(await r.json());}"
             "tick();setInterval(tick,4000);"
@@ -351,6 +361,17 @@ void handleRoot() {
 }
 
 void handleStatus() {
+  uint8_t nrfPeak = 0;
+  uint16_t nrfActiveChannels = 0;
+  for (size_t i = 0; i < sizeof(nrfHits); ++i) {
+    if (nrfHits[i] > nrfPeak) {
+      nrfPeak = nrfHits[i];
+    }
+    if (nrfHits[i] > 0) {
+      ++nrfActiveChannels;
+    }
+  }
+
   String json;
   json.reserve(24000);
   json += F("{");
@@ -368,6 +389,10 @@ void handleStatus() {
   json += String(millis() - lastWifiScanMs);
   json += F(",\"nrf_age_ms\":");
   json += String(millis() - lastNrfScanMs);
+  json += F(",\"nrf_peak\":");
+  json += String(nrfPeak);
+  json += F(",\"nrf_active_channels\":");
+  json += String(nrfActiveChannels);
   json += F(",\"ble_age_ms\":");
   json += String(millis() - lastBleScanMs);
   json += F(",\"wifi\":[");
